@@ -1,5 +1,5 @@
-# BPLsh
-Search through Boston Public Library's collections via your command line
+# bplsh
+Search through Boston Public Library's collections via your command line. Find book availability, browse titles, etc.
 
 ### Requirements
 `python 3.0`

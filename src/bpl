@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+
+# MIT License
+
+# Copyright (c) Jake Ginesin
+
+# Do whatever you want with this idc
+
+import sys, requests, xml.etree.ElementTree as ET, json
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def show_help():
+  print("Usage: ")
+  print("  bpl [Option]")
+  print("")
+  print("Options: ")
+  print("  search:   search stuff") 
+  print("  help:     show help msg ")
+  print("")
+  print("Enter `bpl <option> help` for more!")
+
+def show_search_help():
+    print("Usage: ")
+    print("  bpl search [value] <arg1> <arg2> ...")
+    print("")
+    print("Arguments: ")
+    print("  -n --num [value]:       number of results to show")
+    print("  -p --page [value]:      page number to show")
+    print("  -a --availability:      show availability")
+    print("  -o --only-available:    show only available books")
+    print("  -d --desc:              show description")
+    print("  -i --isbn               show ISBN-13")
+
+args = sys.argv
+if len(args) == 1:
+    show_help()
+    sys.exit()
+
+match args[1]:
+    case "search":
+        if len(args) == 2:
+            show_search_help()
+            sys.exit()
+        elif args[2] == "help":
+            show_search_help()
+            sys.exit()
+        else:
+            # parse arguments
+            num = int(args[args.index("-n")+1]) if "-n" in args else int(args[args.index("--num")+1]) if "--num" in args else 10
+            page = int(args[args.index("-p")+1]) if "-p" in args else int(args[args.index("--page")+1]) if "--page" in args else 1
+            availability = True if "-a" in args or "--availability" in args else False
+            only_available = True if "-o" in args or "--only-available" in args else False
+            description = True if "-d" in args or "--description" in args else False
+            isbn = True if "-i" in args or "--isbn" in args else False
+
+            base_url = "https://gateway.bibliocommons.com/v2/libraries/bpl/rss/search?query="+args[2]+"&searchType=smart&page="+str(page)+"&view=grouped"
+            r = requests.get(base_url)
+            if r.status_code == 200:
+                root = ET.fromstring(r.content)
+                count = 0
+                for item in root.iter('item'):
+                    if count >= num:
+                        break
+
+                    if only_available or availability:
+                        link = item.find('link').text
+
+                        # bpl has this weird thing where we need to rediredt to the actual link
+                        # then, ping the api with the ID from said link
+                        f = requests.get(link)
+                        url = f.url
+                        bid = url[url.rfind("/")+1:]
+                        rurl = "https://gateway.bibliocommons.com/v2/libraries/bpl/bibs/"+bid+"/availability?locale=en-US"
+                        r = requests.get(rurl)
+
+                        j = json.loads(r.content)
+                        bibitems = j["entities"]["bibItems"]
+                        existsAvailable = False
+                        available = {}
+                        for bibitem in bibitems:
+                            if j["entities"]["bibItems"][bibitem]["availability"]["statusType"] == "AVAILABLE":
+                                branch = j["entities"]["bibItems"][bibitem]["branch"]["name"]
+                                if branch in available:
+                                    available[branch] += 1
+                                else:
+                                    available[branch] = 1
+                                existsAvailable = True
+                        
+                        if not existsAvailable and only_available:
+                            continue
+
+                    subtitle = "" if str(item.find('subtitle').text) == "None" else " - " + str(item.find('subtitle').text)
+                    print(bcolors.BOLD + item.find('title').text + bcolors.ENDC + subtitle)
+                    if description:
+                        if item.find('description') is not None:
+                            desc = item.find('description').text if len(item.find('description').text) < 100 else item.find('description').text[:100] + "..."
+                            print("    " + bcolors.OKGREEN + desc + bcolors.ENDC)
+
+                    for child in item:
+                        if child.tag == "{http://purl.org/dc/elements/1.1/}creator": 
+                            print("    \x1B[3m" + "by: " + child.text + "\x1B[0m" + bcolors.ENDC)
+                            pass
+                        else:
+                            pass
+
+                    if isbn:
+                        # we're forced to extract the ISBN from the iamge url
+                        imageurl = item.find('image_url').text if item.find('image_url').text is not None else ""
+                        if imageurl != "":
+                            isbn = imageurl[imageurl.find("isbn")+5:imageurl.find("isbn")+18]
+                            print("    \x1B[3m" + "ISBN: " + isbn + "\x1B[0m" + bcolors.ENDC)
+                    
+                    if availability:
+                        for branch in available:
+                            print("    \x1B[3m" + branch + ": " + str(available[branch]) + " available" + "\x1B[0m" + bcolors.ENDC)
+
+                        if not existsAvailable:
+                            print(bcolors.WARNING + "    \x1B[3m" + "Not available" + "\x1B[0m" + bcolors.ENDC)
+
+                    # if not last item
+                    if count != num-1:
+                        print("")
+                    count += 1
+                  
+            else:
+                print("Error: "+r.status_code)
+                sys.exit()
+    case "help":
+        show_help()
+        sys.exit()
